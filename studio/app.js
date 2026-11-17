@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { localBackend } from './backend-local.js';
-import { Stage, FrameRenderer, newProject, objectState, cameraState, applyCamera, shotAt, EASES, POSES, HERO_COLORS, DEFAULT_LOOK } from './engine.js';
+import { Stage, FrameRenderer, newProject, objectState, cameraState, applyCamera, shotAt, EASES, POSES, HERO_COLORS, DEFAULT_LOOK,
+  worldTransform, attachments, wouldCycle, followFrame, hingeOf, PIVOTS, objById } from './engine.js';
 
 const $ = (s) => document.querySelector(s);
 const R3 = (v) => Math.round(v * 1000) / 1000;
@@ -57,10 +58,10 @@ function rebuildPaths() {
   for (const s of shots) for (let t = s.from; t <= s.to - 1e-3; t += 1 / 12) pts.push(new THREE.Vector3(...cameraState(P, t).pos));
   camPath.geometry.dispose(); camPath.geometry = new THREE.BufferGeometry().setFromPoints(pts.length > 1 ? pts : [new THREE.Vector3(), new THREE.Vector3()]);
   const o = selObj();
-  if (o && o.keys && o.keys.length > 1) {
-    const op = []; for (let t = 0; t <= P.duration + 1e-6; t += 1 / 12) { const p = objectState(o, t).pos; op.push(new THREE.Vector3(p[0], p[1] + 0.05, p[2])); }
+  if (o && ((o.keys && o.keys.length > 1) || o.attach?.length)) {
+    const op = []; for (let t = 0; t <= P.duration + 1e-6; t += 1 / 12) { const p = worldTransform(o, t, P).pos; op.push(new THREE.Vector3(p[0], p[1] + 0.05, p[2])); }
     objPath.geometry.dispose(); objPath.geometry = new THREE.BufferGeometry().setFromPoints(op); objPath.visible = true;
-    keyDots.geometry.dispose(); keyDots.geometry = new THREE.BufferGeometry().setFromPoints(o.keys.map((k) => new THREE.Vector3(k.pos[0], k.pos[1] + 0.05, k.pos[2]))); keyDots.visible = true;
+    keyDots.geometry.dispose(); keyDots.geometry = new THREE.BufferGeometry().setFromPoints((o.keys || []).map((k) => { const p = worldTransform(o, k.t, P).pos; return new THREE.Vector3(p[0], p[1] + 0.05, p[2]); })); keyDots.visible = !!o.keys?.length;
   } else { objPath.visible = false; keyDots.visible = false; }
 }
 
@@ -211,6 +212,7 @@ async function addObject(type) {
   switch (type) {
     case 'person': { const i = heroCount(); o = { id: uid('o'), name: `Герой ${i + 1}`, type, hero: true, labelColor: HERO_COLORS[i % HERO_COLORS.length], size: [0.5, 1.75], look: { ...DEFAULT_LOOK, top: HERO_COLORS[i % HERO_COLORS.length] }, pos, rot: [0, 0, 0] }; break; }
     case 'car': o = { id: uid('o'), name: `Машина ${n}`, type, size: [1.8, 1.45, 4.3], color: '#7e8185', pos, rot: [0, 0, 0] }; break;
+    case 'boat': o = { id: uid('o'), name: `Катер ${n}`, type, size: [3, 1.2, 9], color: '#9a9da1', pos, rot: [0, 0, 0] }; break;
     case 'wall': o = { id: uid('o'), name: `Стена ${n}`, type: 'box', size: [6, 3, 0.2], color: '#b4b7ba', pos, rot: [0, 0, 0] }; break;
     case 'plane': o = { id: uid('o'), name: `Плита ${n}`, type: 'plane', size: [6, 0.02, 6], color: '#a3a6aa', pos, rot: [0, 0, 0] }; break;
     case 'cyl': o = { id: uid('o'), name: `Цилиндр ${n}`, type, size: [0.6, 1.2], color: '#9a9da1', pos, rot: [0, 0, 0] }; break;
@@ -236,16 +238,29 @@ function pickFile(accept, cb) { const f = $('#filePick'); f.accept = accept; f.v
 function upsertKey(o, t, patch) {
   o.keys ||= []; const eps = 0.5 / fps();
   let k = o.keys.find((x) => Math.abs(x.t - t) < eps);
-  if (!k) { const st = objectState(o, t); k = { t, pos: st.pos.map(R3), rot: st.rot.map(R1), ease: 'linear' }; o.keys.push(k); o.keys.sort((a, b) => a.t - b.t); }
+  if (!k) { const st = worldTransform(o, t, P); k = { t, pos: st.pos.map(R3), rot: st.rot.map(R1), ease: 'linear' }; o.keys.push(k); o.keys.sort((a, b) => a.t - b.t); }
   Object.assign(k, patch); selKeyT = k.t; return k;
 }
 function commitTransform() {
   const o = selObj(), n = o && stage.nodes.get(o.id); if (!n) return;
-  const pos = [R3(n.position.x), R3(n.position.y), R3(n.position.z)];
+  const h = n.userData.hinge || [0, 0, 0];   // узел с петлёй стоит на петле, а в данных — центр основания
+  const pos = [R3(n.position.x - h[0] * n.scale.x), R3(n.position.y - h[1] * n.scale.y), R3(n.position.z - h[2] * n.scale.z)];
   const rot = [R1(THREE.MathUtils.radToDeg(n.rotation.x)), R1(THREE.MathUtils.radToDeg(n.rotation.y)), R1(THREE.MathUtils.radToDeg(n.rotation.z))];
   setTransform(o, pos, rot);
 }
+// привязка, действующая в момент t (или null)
+const attachAt = (o, t) => attachments(o, P).find((a) => t >= a.from && t < a.to) || null;
+// мировая поза -> смещение относительно родителя
+function toOffset(a, t, pos, rot) {
+  const W = worldTransform(objById(P, a.parent), t, P);
+  const v = new THREE.Vector3(pos[0] - W.pos[0], pos[1] - W.pos[1], pos[2] - W.pos[2]).applyQuaternion(W.quat.clone().invert());
+  const q = W.quat.clone().invert().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot.map((x) => x * Math.PI / 180), 'XYZ')));
+  const yaw = new THREE.Euler().setFromQuaternion(q, 'YXZ').y * 180 / Math.PI;
+  return { offset: [R3(v.x / W.scale[0]), R3(v.y / W.scale[1]), R3(v.z / W.scale[2])], rotY: R1(yaw) };
+}
 function setTransform(o, pos, rot) {
+  const a = attachAt(o, T);
+  if (a) return change(() => Object.assign(a, toOffset(a, T, pos, rot)));   // на привязанном объекте гизмо меняет смещение
   change(() => {
     if (o.keys && o.keys.length) upsertKey(o, snapT(T), { pos, rot });
     else if (autoKey && T > 0.001) { o.keys = [{ t: 0, pos: (o.pos || [0, 0, 0]).slice(), rot: (o.rot || [0, 0, 0]).slice(), ease: 'linear' }, { t: snapT(T), pos, rot, ease: 'linear' }]; selKeyT = snapT(T); delete o.pos; delete o.rot; }
@@ -264,7 +279,8 @@ function camKeyFromView() {
   let s = selShot(); if (!s || T < s.from || T > s.to) { s = shotAt(P, T); }
   const t = Math.min(s.to, Math.max(s.from, snapT(T)));
   change(() => {
-    const k = { t, pos: dirCam.position.toArray().map(R3), target: orbit.target.toArray().map(R3), lens: Math.round(dirCam.getFocalLength()) };
+    const F = followFrame(P, s, t);   // у плана «за объектом» ключи хранятся в координатах объекта
+    const k = { t, pos: F.toLocal(dirCam.position.toArray()).map(R3), target: F.toLocal(orbit.target.toArray()).map(R3), lens: Math.round(dirCam.getFocalLength()) };
     const eps = 0.5 / fps(); const ex = s.keys.find((x) => Math.abs(x.t - t) < eps);
     if (ex) Object.assign(ex, k); else { s.keys.push(k); s.keys.sort((a, b) => a.t - b.t); }
     selKeyT = t;
@@ -280,8 +296,9 @@ function splitShot() {
   const s = shotAt(P, T), t = snapT(T);
   if (t <= s.from + 0.1 || t >= s.to - 0.1) return toast('Встань внутри плана, не у края');
   const cs = cameraState(P, t);
-  const ns = { id: uid('s'), name: `План ${P.shots.length + 1}`, from: t, to: s.to, ease: s.ease, shake: s.shake || 0,
-    keys: [{ t, pos: cs.pos.map(R3), target: cs.target.map(R3), lens: Math.round(cs.lens) }, ...s.keys.filter((k) => k.t > t)] };
+  const F = followFrame(P, s, t);
+  const ns = { id: uid('s'), name: `План ${P.shots.length + 1}`, from: t, to: s.to, ease: s.ease, shake: s.shake || 0, ...(s.follow ? { follow: s.follow, followYaw: s.followYaw } : {}),
+    keys: [{ t, pos: F.toLocal(cs.pos).map(R3), target: F.toLocal(cs.target).map(R3), lens: Math.round(cs.lens) }, ...s.keys.filter((k) => k.t > t)] };
   change(() => { s.to = t; s.keys = s.keys.filter((k) => k.t <= t); if (!s.keys.length) s.keys.push({ ...ns.keys[0] }); P.shots.push(ns); P.shots.sort((a, b) => a.from - b.from); });
   sel = { kind: 'shot', id: ns.id }; refreshAll();
 }
@@ -443,8 +460,13 @@ function propsProject(el) {
   bind('locOp', 'input', (e) => { P.refs.overlay = +e.target.value; }); bind('locOp', 'change', () => markDirty());
 }
 
+let showScaleCol = false;   // колонка «масштаб» в таблице ключей свёрнута до щелчка
+const PRIMS = ['box', 'plane', 'cyl', 'sphere', 'cone', 'capsule', 'car', 'boat'];
+const poseSel = (id, v, short = false) => `<select id="${id}">${Object.entries(POSES).map(([p, n]) => `<option value="${p}" ${(v || 'auto') === p ? 'selected' : ''}>${short ? n.split(' ')[0] : n}</option>`).join('')}</select>`;
+const objOpts = (o, v, allowNone) => (allowNone ? '<option value="">—</option>' : '') + P.objects.filter((x) => x.id !== o?.id).map((x) => `<option value="${x.id}" ${x.id === v ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
 function propsObject(el, o) {
-  const st = objectState(o, T), animated = o.keys?.length > 0, isP = o.type === 'person', L = { ...DEFAULT_LOOK, ...(o.look || {}) };
+  const st = worldTransform(o, T, P), animated = o.keys?.length > 0, isP = o.type === 'person', L = { ...DEFAULT_LOOK, ...(o.look || {}) };
+  const curA = attachAt(o, T);
   const node = stage.nodes.get(o.id), clips = node?.userData.clips || [];
   let h = `<h4>${isP ? 'Человек' : o.type === 'glb' ? '3D-модель' : 'Объект'}</h4>
     ${row('Имя', `<input type="text" id="oName" value="${esc(o.name)}" style="width:100%">`)}
@@ -467,18 +489,33 @@ function propsObject(el, o) {
   } else {
     const s = o.size || [1, 1, 1], d3 = ['box', 'plane', 'car'].includes(o.type);
     h += row('Цвет', col('oCol', o.color || '#9a9da1')) + row(d3 ? 'Ш × В × Г, м' : 'Диаметр × В, м', `<div class="vec">${num('s0', s[0])}${o.type === 'plane' ? '' : num('s1', s[1])}${d3 ? num('s2', s[2] ?? s[0]) : ''}</div>`);
+    if (PRIMS.includes(o.type)) h += row('Ось вращения', `<select id="oPiv">${Object.entries(PIVOTS).map(([k, n]) => `<option value="${k}" ${(o.pivot || 'center') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`);
     if (o.hero) h += `<div class="btns"><button id="oRef">${o.ref ? 'Заменить фото' : 'Фото-референс'}</button></div>${o.ref ? `<img class="thumb" src="${assetURL(o.ref)}">` : ''}`;
   }
-  h += `<h4>Положение на ${T.toFixed(2)} с ${animated ? '(анимирован)' : ''}</h4>
+  h += `<h4>Положение на ${T.toFixed(2)} с ${curA ? `(привязан к «${esc(objById(P, curA.parent)?.name)}»)` : animated ? '(анимирован)' : ''}</h4>
     ${row('X · Y · Z, м', `<div class="vec">${num('px', R1(st.pos[0]))}${num('py', R1(st.pos[1]))}${num('pz', R1(st.pos[2]))}</div>`)}
     ${row('Поворот, °', `<div class="vec">${['person', 'car', 'glb'].includes(o.type) ? '' : num('rx', R1(st.rot[0]), 5)}${num('ry', R1(st.rot[1]), 5)}${['person', 'car', 'glb'].includes(o.type) ? '' : num('rz', R1(st.rot[2]), 5)}</div>`)}
     ${animated && ['person', 'car', 'glb'].includes(o.type) ? row('Направление', `<select id="oFace"><option value="travel" ${o.face !== 'none' ? 'selected' : ''}>по движению</option><option value="none" ${o.face === 'none' ? 'selected' : ''}>как задано</option></select>`) : ''}
-    ${!animated && isP ? row('Поза', `<select id="oPose">${Object.entries(POSES).map(([k, n]) => `<option value="${k}" ${(o.pose || 'auto') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`) : ''}
+    ${!animated && isP ? row('Поза', poseSel('oPose', o.pose)) : ''}
+    ${row('Масштаб', `<div class="vec">${[0, 1, 2].map((j) => num('sc' + j, (o.scale || [1, 1, 1])[j], 0.05)).join('')}</div>`)}
+    <h4>Привязки</h4>`;
+  const A = o.attach || [];
+  if (A.length) h += A.map((a, i) => `<div class="att">
+      ${row('Родитель', `<select id="aP${i}">${objOpts(o, a.parent)}</select>`)}
+      ${row('С · до, с', `<div class="vec">${num('aF' + i, a.from, 1 / fps())}${num('aT' + i, a.to, 1 / fps())}</div>`)}
+      ${row('Смещение', `<div class="vec">${[0, 1, 2].map((j) => num(`aO${i}_${j}`, (a.offset || [0, 0, 0])[j], 0.05)).join('')}</div>`)}
+      ${row('Поворот Y, °', num('aR' + i, a.rotY || 0, 5))}
+      ${row('Полёт перед', `<input type="checkbox" id="aFl${i}" ${a.flight ? 'checked' : ''}>${a.flight ? ` дуга ${num('aArc' + i, a.flight.arc ?? 2, 0.1, 'style="width:52px"')} кувырок ${num('aSpin' + i, a.flight.spin ?? 0, 30, 'style="width:58px"')}° ${poseSel('aPose' + i, a.flight.pose || 'jump', true)}` : ''}`)}
+      <div class="btns"><button class="small" id="aGo${i}">→ к началу</button><button class="small" id="aDel${i}">✕ отвязать</button></div></div>`).join('')
+    + `<div class="muted">Внутри интервала объект едет с родителем, его ключи дают только позу. Гизмо меняет смещение. «Полёт» — дуга от прошлого отцепления до этой привязки.</div>`;
+  else h += `<div class="muted">Объект ни к чему не привязан. Привязка: едет вместе с родителем (пассажир, груз в руках).</div>`;
+  h += `<div class="btns"><select id="attSel">${objOpts(o, null, false)}</select><button id="attGo">🔗 Привязать с текущего места</button></div>
     <h4>Ключи движения</h4>`;
   if (animated) {
-    h += `<table class="keys"><tr class="muted"><td>время</td><td>подход</td>${isP ? '<td>поза</td>' : ''}<td></td></tr>${o.keys.map((k, i) => `<tr class="${selKeyT !== null && Math.abs(k.t - selKeyT) < 1e-3 ? 'cur' : ''}">
+    h += `<table class="keys"><tr class="muted"><td>время</td><td>подход</td>${isP ? '<td>поза</td>' : ''}<td><button class="small" id="kScT" title="показать / скрыть масштаб">${showScaleCol ? 'масштаб ▾' : 'масштаб ▸'}</button></td><td></td></tr>${o.keys.map((k, i) => `<tr class="${selKeyT !== null && Math.abs(k.t - selKeyT) < 1e-3 ? 'cur' : ''}">
       <td>${num('kt' + i, k.t, 1 / fps(), 'min="0"')}</td><td>${i === 0 ? '<span class="muted">старт</span>' : easeSel('ke' + i, k.ease || 'linear')}</td>
-      ${isP ? `<td><select id="kp${i}">${Object.entries(POSES).map(([p, n]) => `<option value="${p}" ${(k.pose || 'auto') === p ? 'selected' : ''}>${n.split(' ')[0]}</option>`).join('')}</select></td>` : ''}
+      ${isP ? `<td>${poseSel('kp' + i, k.pose, true)}</td>` : ''}
+      <td>${showScaleCol ? `<div class="vec">${[0, 1, 2].map((j) => num(`ks${i}_${j}`, k.scale ? k.scale[j] : '', 0.05, 'placeholder="—" style="width:44px"')).join('')}</div>` : `<span class="muted">${k.scale ? k.scale.join(' × ') : '—'}</span>`}</td>
       <td><button class="small" id="kg${i}" title="перейти">→</button><button class="small" id="kd${i}" title="удалить">✕</button></td></tr>`).join('')}</table>
       <div class="muted">«подход» — как объект приходит в этот ключ: плавно, с торможением и т.д. Поза держится до следующего ключа.</div>`;
   } else h += `<div class="muted">Объект стоит на месте. Перемести время на таймлайне и сдвинь объект — появится движение.</div>`;
@@ -501,11 +538,33 @@ function propsObject(el, o) {
   const tf = () => { const g = (id, d) => { const x = document.getElementById(id); return x ? +x.value : d; }; setTransform(o, [g('px', 0), g('py', 0), g('pz', 0)], [g('rx', st.rot[0]), g('ry', 0), g('rz', st.rot[2])]); };
   for (const id of ['px', 'py', 'pz', 'rx', 'ry', 'rz']) bind(id, 'change', tf);
   bind('oFace', 'change', (e) => change(() => (o.face = e.target.value)));
+  bind('oPiv', 'change', (e) => change(() => { if (e.target.value === 'center') delete o.pivot; else o.pivot = e.target.value; }, o.id));
+  for (const j of [0, 1, 2]) bind('sc' + j, 'change', (e) => change(() => { o.scale = [...(o.scale || [1, 1, 1])]; o.scale[j] = Math.max(0.01, +e.target.value || 1); if (o.scale.every((v) => v === 1)) delete o.scale; }));
+  bind('kScT', 'click', () => { showScaleCol = !showScaleCol; refreshProps(); });
+  A.forEach((a, i) => {
+    bind('aP' + i, 'change', (e) => { if (wouldCycle(P, o.id, e.target.value)) { toast('Так получится цикл привязок'); return refreshProps(); } change(() => (a.parent = e.target.value)); });
+    bind('aF' + i, 'change', (e) => change(() => (a.from = snapT(+e.target.value))));
+    bind('aT' + i, 'change', (e) => change(() => (a.to = snapT(+e.target.value))));
+    for (const j of [0, 1, 2]) bind(`aO${i}_${j}`, 'change', (e) => change(() => { a.offset = [...(a.offset || [0, 0, 0])]; a.offset[j] = +e.target.value; }));
+    bind('aR' + i, 'change', (e) => change(() => (a.rotY = +e.target.value)));
+    bind('aFl' + i, 'change', (e) => change(() => { if (e.target.checked) a.flight = { arc: 2, spin: 0, pose: 'jump' }; else delete a.flight; }));
+    bind('aArc' + i, 'change', (e) => change(() => (a.flight.arc = +e.target.value)));
+    bind('aSpin' + i, 'change', (e) => change(() => (a.flight.spin = +e.target.value)));
+    bind('aPose' + i, 'change', (e) => change(() => (a.flight.pose = e.target.value)));
+    bind('aGo' + i, 'click', () => setTime(a.from));
+    bind('aDel' + i, 'click', () => change(() => { o.attach.splice(i, 1); if (!o.attach.length) delete o.attach; }));
+  });
+  bind('attGo', 'click', () => attachHere(o, $('#attSel').value));
   bind('oPose', 'change', (e) => change(() => (o.pose = e.target.value)));
   (o.keys || []).forEach((k, i) => {
     bind('kt' + i, 'change', (e) => change(() => { k.t = snapT(+e.target.value); o.keys.sort((a, b) => a.t - b.t); selKeyT = k.t; }));
     bind('ke' + i, 'change', (e) => change(() => (k.ease = e.target.value)));
     bind('kp' + i, 'change', (e) => change(() => (k.pose = e.target.value)));
+    for (const j of [0, 1, 2]) bind(`ks${i}_${j}`, 'change', (e) => change(() => {
+      const v = e.target.value === '' ? null : Math.max(0.01, +e.target.value);
+      if (v === null) { delete k.scale; return; }
+      k.scale = [...(k.scale || objectState(o, k.t).scale)]; k.scale[j] = v;
+    }));
     bind('kg' + i, 'click', () => { selKeyT = k.t; setTime(k.t); refreshAll(); });
     bind('kd' + i, 'click', () => change(() => { o.keys.splice(i, 1); if (o.keys.length === 0) { o.pos = k.pos; o.rot = k.rot; delete o.keys; } }));
   });
@@ -513,6 +572,21 @@ function propsObject(el, o) {
   bind('kClr', 'click', () => change(() => { const s0 = objectState(o, T); o.pos = s0.pos.map(R3); o.rot = s0.rot.map(R1); delete o.keys; }));
   bind('oDup', 'click', duplicateObject); bind('oDel', 'click', deleteObject);
 }
+// привязать объект к родителю с текущего места: смещение считается из текущих позиций
+function attachHere(o, pid) {
+  if (!pid) return;
+  if (wouldCycle(P, o.id, pid)) return toast('Так получится цикл привязок: родитель уже едет на этом объекте');
+  const t = snapT(T), w = worldTransform(o, t, P);
+  change(() => {
+    o.attach ||= [];
+    const cur = o.attach.find((a) => t >= a.from && t < a.to); if (cur) cur.to = t;   // прошлая привязка заканчивается здесь
+    const next = o.attach.filter((a) => a.from > t).sort((a, b) => a.from - b.from)[0];
+    const a = { parent: pid, from: t, to: next ? next.from : P.duration, ...toOffsetAt(pid, t, w) };
+    o.attach.push(a); o.attach.sort((x, y) => x.from - y.from);
+  });
+  toast(`Привязан к «${objById(P, pid)?.name}» с ${t.toFixed(2)} с`);
+}
+const toOffsetAt = (pid, t, w) => toOffset({ parent: pid }, t, w.pos, w.rot);
 function addObjKey() {
   const o = selObj(); if (!o) return;
   change(() => { if (!o.keys?.length) { o.keys = [{ t: 0, pos: (o.pos || [0, 0, 0]).slice(), rot: (o.rot || [0, 0, 0]).slice(), ease: 'linear' }]; delete o.pos; delete o.rot; } upsertKey(o, snapT(T), {}); });
@@ -526,6 +600,9 @@ function propsShot(el, s) {
     ${row('Движение', easeSel('sEase', s.ease || 'inOut'))}
     ${row('Тряска (рука)', `<input type="range" id="sShake" min="0" max="0.06" step="0.005" value="${s.shake || 0}">`)}
     ${row('Завал горизонта', num('sRoll', s.roll || 0, 1))}
+    ${row('Следовать за', `<select id="sFol">${objOpts(null, s.follow, true)}</select>`)}
+    ${s.follow ? row('', `<label><input type="checkbox" id="sFolY" ${s.followYaw !== false ? 'checked' : ''}> поворачивать вместе с объектом</label>`) : ''}
+    ${s.follow ? '<div class="muted">Ключи камеры заданы относительно объекта: камера летит вместе с ним. «Ключ из рабочего вида» сам переводит вид в его координаты.</div>' : ''}
     <h4>Ключи камеры</h4>
     <table class="keys"><tr class="muted"><td>время</td><td>объектив</td><td></td></tr>${s.keys.map((k, j) => `<tr class="${selKeyT !== null && Math.abs(k.t - selKeyT) < 1e-3 ? 'cur' : ''}"><td>${num('ct' + j, k.t, 1 / fps())}</td><td>${num('cl' + j, k.lens, 1)} мм</td><td><button class="small" id="cg${j}">→</button><button class="small" id="cd${j}">✕</button></td></tr>`).join('')}</table>
     <div class="muted">Один ключ — камера стоит. Два и больше — камера едет по плавной кривой через все ключи. «Движение» задаёт разгон и торможение всего проезда.</div>
@@ -534,6 +611,14 @@ function propsShot(el, s) {
   bind('sEase', 'change', (e) => change(() => (s.ease = e.target.value)));
   bind('sShake', 'change', (e) => change(() => (s.shake = +e.target.value)));
   bind('sRoll', 'change', (e) => change(() => (s.roll = +e.target.value)));
+  // смена «следовать за»: ключи пересчитываются, чтобы камера осталась на месте
+  const refollow = (mut) => change(() => {
+    const old = s.keys.map((k) => { const F = followFrame(P, s, k.t); return { pos: F.toWorld(k.pos), target: F.toWorld(k.target) }; });
+    mut();
+    s.keys.forEach((k, j) => { const F = followFrame(P, s, k.t); k.pos = F.toLocal(old[j].pos).map(R3); k.target = F.toLocal(old[j].target).map(R3); });
+  });
+  bind('sFol', 'change', (e) => refollow(() => { if (e.target.value) { s.follow = e.target.value; s.followYaw ??= true; } else { delete s.follow; delete s.followYaw; } }));
+  bind('sFolY', 'change', (e) => refollow(() => (s.followYaw = e.target.checked)));
   const retime = () => change(() => {
     const f = Math.max(0, +$('#sFrom').value), t = Math.min(P.duration, +$('#sTo').value); if (t - f < 0.2) return;
     const j = S.indexOf(s), prev = S[j - 1], next = S[j + 1];

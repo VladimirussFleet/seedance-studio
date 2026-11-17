@@ -36,7 +36,7 @@ h4 { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 #vbar { position: absolute; left: 10px; top: 10px; display: flex; gap: 6px; align-items: center; background: rgba(22,23,26,.85); padding: 5px; border-radius: 8px; border: 1px solid var(--line); }
 #hint { position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 34% - 40px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); font-size: 11.5px; background: rgba(22,23,26,.7); padding: 4px 8px; border-radius: 6px; pointer-events: none; }
 #right .row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 6px; margin: 5px 0; }
-#right .row > label { color: var(--dim); } #right .vec { display: flex; gap: 4px; } #right .vec input { width: 100%; }
+#right .att { border-left: 2px solid #ff9f0a55; padding-left: 8px; margin: 6px 0 10px; } #right .row > label { color: var(--dim); } #right .vec { display: flex; gap: 4px; } #right .vec input { width: 100%; }
 #right .btns { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
 .keys { width: 100%; border-collapse: collapse; margin-top: 4px; } .keys td { padding: 2px 2px; } .keys tr.cur td { background: #3a3320; }
 .keys input[type=number] { width: 58px; } .keys select { width: 100%; }
@@ -82,7 +82,8 @@ h4 { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
       <button data-add="box">⬛ Куб</button><button data-add="wall">▮ Стена</button>
       <button data-add="plane">▭ Плита/пол</button><button data-add="cyl">⬤ Цилиндр</button>
       <button data-add="sphere">● Шар</button><button data-add="cone">▲ Конус</button>
-      <button data-add="capsule">💊 Капсула</button><button data-add="glb">📦 3D-модель</button>
+      <button data-add="capsule">💊 Капсула</button><button data-add="boat">⛵ Катер</button>
+      <button data-add="glb">📦 3D-модель</button>
     </div>
     <h4>Объекты сцены</h4>
     <div id="objlist"></div>
