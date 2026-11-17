@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>render</title><link rel="icon" href="data:,">
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+<style>html,body{margin:0;background:#000}</style></head><body>
+<script type="module">
+// Страница для render.mjs: грузит проект ?p=<имя> и отдаёт кадры. В браузере её открывать не нужно.
+import { Stage, FrameRenderer } from './engine.js';
+const name = new URLSearchParams(location.search).get('p');
+const r = await (await fetch(`/api/project?name=${encodeURIComponent(name)}`)).json();
+const stage = new Stage((p) => `/p/${encodeURIComponent(name)}/${p}`);
+await stage.load(r.data);
+const fr = new FrameRenderer(stage);
+window.info = { ...r.data.format, duration: r.data.duration, shots: [...r.data.shots].sort((a, b) => a.from - b.from).map((s) => [s.from, s.to, s.name]) };
+window.frameJPEG = (t, labels) => fr.frame(t, labels).toDataURL('image/jpeg', 0.93).split(',')[1];
+window.__ready = true;
+</script></body></html>
