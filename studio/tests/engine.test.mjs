@@ -79,8 +79,10 @@ const file = process.argv[2];
 if (file) {
   const P = JSON.parse(fs.readFileSync(file, 'utf8'));
   console.log('5. Сцена ' + (P.name || file));
+  const cuts = P.shots.map((s) => s.from);   // на склейке скачок не виден: внутри плана — проверяем
   for (const o of P.objects) for (const a of attachments(o, P)) for (const edge of [a.from, a.to]) {
     if (edge <= 0 || edge >= P.duration) continue;
+    if (cuts.some((c) => Math.abs(c - edge) < 1e-6)) { console.log(`  · ${o.name || o.id} @ ${edge} с — на склейке, пропуск`); continue; }
     const r = jumpCheck((t) => worldTransform(o, t, P).pos, edge);
     ok(r.ok, `${o.name || o.id} @ ${edge} с: шаги ${r.s1.toFixed(3)} / ${r.s2.toFixed(3)} м, допуск ${r.lim.toFixed(3)} м`);
   }

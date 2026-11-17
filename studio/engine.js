@@ -276,9 +276,14 @@ function posePerson(g, o, t, pose, project) {
 function buildCar(o, mat) {
   const [w, h, d] = [o.size?.[0] ?? 1.8, o.size?.[1] ?? 1.45, o.size?.[2] ?? 4.3], g = new THREE.Group();
   m(new THREE.BoxGeometry(w, h * 0.42, d), mat, g, 0, h * 0.42 / 2 + h * 0.15, 0);
-  m(new THREE.BoxGeometry(w * 0.88, h * 0.4, d * 0.5), mat, g, 0, h * 0.57 + h * 0.2, -d * 0.04);
   const glass = std('#2a3138', 0.2);
-  m(new THREE.BoxGeometry(w * 0.9, h * 0.3, 0.02), glass, g, 0, h * 0.78, d * 0.21);
+  if (o.open) {   // кабриолет: без крыши, только лобовое стекло и спинки сидений
+    m(new THREE.BoxGeometry(w * 0.9, h * 0.2, 0.03).rotateX(-0.45), glass, g, 0, h * 0.67, d * 0.15);
+    for (const z of [-0.02, -0.26]) m(new THREE.BoxGeometry(w * 0.8, h * 0.2, 0.1), std('#2b2b30', 0.8), g, 0, h * 0.67, d * z);
+  } else {
+    m(new THREE.BoxGeometry(w * 0.88, h * 0.4, d * 0.5), mat, g, 0, h * 0.57 + h * 0.2, -d * 0.04);
+    m(new THREE.BoxGeometry(w * 0.9, h * 0.3, 0.02), glass, g, 0, h * 0.78, d * 0.21);
+  }
   const wheel = std('#1b1b1d', 0.8);
   for (const x of [-1, 1]) for (const z of [-1, 1]) m(new THREE.CylinderGeometry(h * 0.23, h * 0.23, 0.22, 20).rotateZ(Math.PI / 2), wheel, g, x * (w / 2 - 0.08), h * 0.23, z * d * 0.32);
   g.userData = { kind: 'car', height: h }; return g;

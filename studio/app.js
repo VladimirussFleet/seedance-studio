@@ -489,6 +489,7 @@ function propsObject(el, o) {
   } else {
     const s = o.size || [1, 1, 1], d3 = ['box', 'plane', 'car'].includes(o.type);
     h += row('Цвет', col('oCol', o.color || '#9a9da1')) + row(d3 ? 'Ш × В × Г, м' : 'Диаметр × В, м', `<div class="vec">${num('s0', s[0])}${o.type === 'plane' ? '' : num('s1', s[1])}${d3 ? num('s2', s[2] ?? s[0]) : ''}</div>`);
+    if (o.type === 'car') h += row('Кабриолет', `<input type="checkbox" id="oOpen" ${o.open ? 'checked' : ''}> <span class="muted">без крыши, видно пассажиров</span>`);
     if (PRIMS.includes(o.type)) h += row('Ось вращения', `<select id="oPiv">${Object.entries(PIVOTS).map(([k, n]) => `<option value="${k}" ${(o.pivot || 'center') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`);
     if (o.hero) h += `<div class="btns"><button id="oRef">${o.ref ? 'Заменить фото' : 'Фото-референс'}</button></div>${o.ref ? `<img class="thumb" src="${assetURL(o.ref)}">` : ''}`;
   }
@@ -538,6 +539,7 @@ function propsObject(el, o) {
   const tf = () => { const g = (id, d) => { const x = document.getElementById(id); return x ? +x.value : d; }; setTransform(o, [g('px', 0), g('py', 0), g('pz', 0)], [g('rx', st.rot[0]), g('ry', 0), g('rz', st.rot[2])]); };
   for (const id of ['px', 'py', 'pz', 'rx', 'ry', 'rz']) bind(id, 'change', tf);
   bind('oFace', 'change', (e) => change(() => (o.face = e.target.value)));
+  bind('oOpen', 'change', (e) => change(() => { if (e.target.checked) o.open = true; else delete o.open; }, o.id));
   bind('oPiv', 'change', (e) => change(() => { if (e.target.value === 'center') delete o.pivot; else o.pivot = e.target.value; }, o.id));
   for (const j of [0, 1, 2]) bind('sc' + j, 'change', (e) => change(() => { o.scale = [...(o.scale || [1, 1, 1])]; o.scale[j] = Math.max(0.01, +e.target.value || 1); if (o.scale.every((v) => v === 1)) delete o.scale; }));
   bind('kScT', 'click', () => { showScaleCol = !showScaleCol; refreshProps(); });
