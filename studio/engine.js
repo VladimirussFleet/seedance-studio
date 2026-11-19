@@ -43,16 +43,32 @@ const ONE = [1, 1, 1];
 const sortKeys = (keys) => [...keys].sort((a, b) => a.t - b.t);
 // масштаб без значения в ключе наследуется от предыдущего ключа (по умолчанию [1, 1, 1])
 function prepKeys(keys) { let cur = ONE; return sortKeys(keys).map((k) => { cur = k.scale || cur; return { ...k, scale: cur }; }); }
+// касательная в ключе n по оси j: учитывает время между ключами; ноль, если там остановка или разворот
+function tangent(K, n, j, f) {
+  const P = K[n - 1], C = K[n], N = K[n + 1], sl = (x, y) => (f(y)[j] - f(x)[j]) / Math.max(1e-6, y.t - x.t);
+  if (!P) return N ? sl(C, N) : 0;
+  if (!N) return sl(P, C);
+  const d0 = sl(P, C), d1 = sl(C, N);
+  if (d0 * d1 <= 0) return 0;
+  const m = sl(P, N), lim = 3 * Math.min(Math.abs(d0), Math.abs(d1));
+  return Math.sign(m) * Math.min(Math.abs(m), lim);
+}
+function herm(K, i, j, f, s) {
+  const a = K[i], b = K[i + 1], h = b.t - a.t, s2 = s * s, s3 = s2 * s;
+  return (2 * s3 - 3 * s2 + 1) * f(a)[j] + (s3 - 2 * s2 + s) * h * tangent(K, i, j, f)
+    + (-2 * s3 + 3 * s2) * f(b)[j] + (s3 - s2) * h * tangent(K, i + 1, j, f);
+}
 function interpKeys(K, t) {
   const S = (k) => ({ pos: k.pos, rot: k.rot || [0, 0, 0], pose: k.pose || 'auto', scale: k.scale });
   if (t <= K[0].t) return S(K[0]);
   const L = K[K.length - 1];
   if (t >= L.t) return S(L);
   let i = 0; while (K[i + 1].t < t) i++;
-  const a = K[i], b = K[i + 1], k = ease(b.ease || 'linear', (t - a.t) / (b.t - a.t));
-  const A = K[i - 1] || a, Bn = K[i + 2] || b;
-  const pos = a.pos.map((_, j) => cr(A.pos[j], a.pos[j], b.pos[j], Bn.pos[j], k));
-  const scale = a.scale.map((_, j) => cr(A.scale[j], a.scale[j], b.scale[j], Bn.scale[j], k));
+  const a = K[i], b = K[i + 1], e = b.ease || 'linear', u = (t - a.t) / (b.t - a.t), k = ease(e, u);
+  // равномерный отрезок — гладкая кривая через ключи по времени, без «перелёта» за ключ;
+  // отрезок с плавностью (торможение, разгон…) — прямо от ключа к ключу, скорость задаёт плавность
+  const seg = (f) => e === 'linear' ? f(a).map((_, j) => herm(K, i, j, f, u)) : f(a).map((v, j) => lerp(v, f(b)[j], k));
+  const pos = seg((x) => x.pos), scale = seg((x) => x.scale);
   const ra = a.rot || [0, 0, 0], rb = b.rot || ra;
   return { pos, rot: [angLerp(ra[0], rb[0], k), angLerp(ra[1], rb[1], k), angLerp(ra[2], rb[2], k)], pose: a.pose || 'auto', scale };
 }
