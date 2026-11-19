@@ -21,7 +21,7 @@
    - `title`: «Seedance Studio», `icon: "video"`;
    - `description`: «3D-аниматики для Seedance: место и герои по фото, движение, камера, MP4 для @ref1. Бесплатный инструмент AI Igonin, aiigonin.ru»;
    - `capabilities`: `{"db": {}, "user": {}, "assets": {}, "downloads": true, "sample": {"images": true}}`.
-3. `ArtifactData set`, коллекция `meta`, документ `version`: `{"ver": "<первые 10 знаков sha1 от всех файлов dist-online>"}`.
+3. `ArtifactData set`, коллекция `meta`, документ `version`: `{"ver": "<версия>"}`. Версия считается так: `cd studio/dist-online && cat $(find . -type f | sort) | sha1sum | cut -c1-10`.
 4. Дай ссылку и объясни в 3–4 строках:
    - открывать в Google Chrome на компьютере;
    - внутри уже есть пример «Встреча на улице»: можно сразу нажать «Записать для Seedance»;
@@ -30,7 +30,7 @@
 
 ## Страница устарела
 
-Посчитай хеш `studio/dist-online/*` и сравни с `meta/version` на странице. Отличается — опубликуй `index.html` заново с `url` его страницы и теми же `files` и `capabilities`, без `icon`, затем обнови `meta/version` (с `if_version`). Сцены, фото и модели при этом не пропадают.
+Собери `studio/dist-online/`, посчитай версию той же командой, что в «Первый раз», и сравни с `meta/version` на странице. Отличается — опубликуй `index.html` заново с `url` его страницы и теми же `files` и `capabilities`, без `icon`, затем обнови `meta/version` (с `if_version`). Сцены, фото и модели при этом не пропадают.
 
 ## Собрать сцену по просьбе человека
 
